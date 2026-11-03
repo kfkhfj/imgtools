@@ -1,0 +1,30 @@
+name: Generate Gradle Wrapper
+
+on:
+  workflow_dispatch:
+
+jobs:
+  gen-wrapper:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          
+      - name: Generate Gradle Wrapper
+        run: |
+          gradle wrapper --gradle-version 8.5
+          chmod +x gradlew
+          
+      - name: Commit wrapper files
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🤖 Auto-gen: Add gradlew, gradlew.bat and gradle-wrapper.jar"
+          branch: main
