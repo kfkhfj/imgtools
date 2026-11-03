@@ -1,0 +1,450 @@
+name: Init IdCardMerger Project
+
+on:
+  workflow_dispatch: # 手动触发按钮
+  push:
+    paths:
+      - '.github/workflows/init-project.yml' # 提交此文件时自动触发
+
+jobs:
+  init-project:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 必须有写入权限才能创建文件
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create project structure and files
+        run: |
+          # ========== 1. settings.gradle ==========
+          cat > settings.gradle << 'SETTINGSEOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "IdCardMerger"
+          include ':app'
+          SETTINGSEOF
+
+          # ========== 2. Root build.gradle (Groovy) ==========
+          cat > build.gradle << 'ROOTBUILDEOF'
+          plugins {
+              id 'com.android.application' version '8.2.0' apply false
+              id 'org.jetbrains.kotlin.android' version '1.9.22' apply false
+          }
+          ROOTBUILDEOF
+
+          # ========== 3. App build.gradle (Groovy) ==========
+          mkdir -p app/src/main/java/com/example/idcardmerger
+          mkdir -p app/src/main/res/layout
+          cat > app/build.gradle << 'APPBUILDEOF'
+          plugins {
+              id 'com.android.application'
+              id 'org.jetbrains.kotlin.android'
+          }
+          android {
+              namespace 'com.example.idcardmerger'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.example.idcardmerger"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+              }
+              buildTypes {
+                  release {
+                      minifyEnabled true
+                      proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+                      signingConfig signingConfigs.debug
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = '17' }
+              buildFeatures { viewBinding true }
+          }
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.12.0'
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.11.0'
+              implementation 'io.coil-kt:coil:2.5.0'
+              implementation 'androidx.documentfile:documentfile:1.0.1'
+          }
+          APPBUILDEOF
+
+          # ========== 4. AndroidManifest.xml ==========
+          cat > app/src/main/AndroidManifest.xml << 'MANIFESTEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+                               android:maxSdkVersion="32" />
+              <application
+                  android:allowBackup="true"
+                  android:icon="@mipmap/ic_launcher"
+                  android:label="证件照合并"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.MaterialComponents.Light.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:screenOrientation="portrait">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          MANIFESTEOF
+
+          # ========== 5. MainActivity.kt ==========
+          cat > app/src/main/java/com/example/idcardmerger/MainActivity.kt << 'MAINEOF'
+          package com.example.idcardmerger
+
+          import android.net.Uri
+          import android.os.Bundle
+          import android.widget.SeekBar
+          import androidx.activity.result.contract.ActivityResultContracts
+          import androidx.appcompat.app.AppCompatActivity
+          import com.example.idcardmerger.databinding.ActivityMainBinding
+
+          class MainActivity : AppCompatActivity() {
+              private lateinit var binding: ActivityMainBinding
+              private var frontUri: Uri? = null
+              private var backUri: Uri? = null
+              private val CARD_WIDTH_MM = 85.6f
+              private val CARD_HEIGHT_MM = 54.0f
+
+              private val pickFront = registerForActivityResult(
+                  ActivityResultContracts.GetContent()
+              ) { uri -> frontUri = uri; updatePreview() }
+
+              private val pickBack = registerForActivityResult(
+                  ActivityResultContracts.GetContent()
+              ) { uri -> backUri = uri; updatePreview() }
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  binding = ActivityMainBinding.inflate(layoutInflater)
+                  setContentView(binding.root)
+                  binding.btnPickFront.setOnClickListener { pickFront.launch("image/*") }
+                  binding.btnPickBack.setOnClickListener { pickBack.launch("image/*") }
+                  setupAdjustmentControls()
+                  binding.btnExportPdf.setOnClickListener { exportPdf() }
+                  binding.canvasView.setReferenceSizeMm(CARD_WIDTH_MM, CARD_HEIGHT_MM)
+              }
+
+              private fun setupAdjustmentControls() {
+                  binding.seekBrightness.setOnSeekBarChangeListener(createListener {
+                      binding.canvasView.setBrightness(it)
+                  })
+                  binding.seekContrast.setOnSeekBarChangeListener(createListener {
+                      binding.canvasView.setContrast(it)
+                  })
+                  binding.seekSharpness.setOnSeekBarChangeListener(createListener {
+                      binding.canvasView.setSharpness(it)
+                  })
+              }
+
+              private fun createListener(onChange: (Int) -> Unit) = object : SeekBar.OnSeekBarChangeListener {
+                  override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                      if (fromUser) onChange(p)
+                  }
+                  override fun onStartTrackingTouch(s: SeekBar?) {}
+                  override fun onStopTrackingTouch(s: SeekBar?) {}
+              }
+
+              private fun updatePreview() {
+                  binding.canvasView.setImages(frontUri, backUri)
+              }
+
+              private fun exportPdf() {
+                  val bitmap = binding.canvasView.exportBitmap() ?: return
+                  PdfExporter.export(this, bitmap, "id_card_merged.pdf")
+              }
+          }
+          MAINEOF
+
+          # ========== 6. ImageEditorView.kt ==========
+          cat > app/src/main/java/com/example/idcardmerger/ImageEditorView.kt << 'VIEWEOF'
+          package com.example.idcardmerger
+
+          import android.content.Context
+          import android.graphics.*
+          import android.net.Uri
+          import android.util.AttributeSet
+          import android.view.MotionEvent
+          import android.view.View
+          import androidx.core.graphics.drawable.toBitmap
+          import coil.ImageLoader
+          import coil.request.ImageRequest
+          import kotlinx.coroutines.CoroutineScope
+          import kotlinx.coroutines.Dispatchers
+          import kotlinx.coroutines.launch
+          import kotlin.math.max
+          import kotlin.math.min
+
+          class ImageEditorView @JvmOverloads constructor(
+              context: Context, attrs: AttributeSet? = null
+          ) : View(context, attrs) {
+              private val frontMatrix = Matrix()
+              private val backMatrix = Matrix()
+              private var frontBitmap: Bitmap? = null
+              private var backBitmap: Bitmap? = null
+              private var refWidthMm = 85.6f
+              private var refHeightMm = 54.0f
+              private var pxPerMm = 1f
+              private var brightness = 0
+              private var contrast = 100
+              private var sharpness = 0
+              private var cropRect: RectF? = null
+              private var isCropping = false
+              private var activeMatrix: Matrix? = null
+              private var lastX = 0f
+              private var lastY = 0f
+              private val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+              private val rulerPaint = Paint().apply {
+                  color = Color.RED; strokeWidth = 2f; style = Paint.Style.STROKE
+                  textSize = 28f; textAlign = Paint.Align.CENTER
+              }
+
+              init { pxPerMm = context.resources.displayMetrics.xdpi / 25.4f }
+
+              fun setReferenceSizeMm(w: Float, h: Float) {
+                  refWidthMm = w; refHeightMm = h; invalidate()
+              }
+
+              fun setImages(front: Uri?, back: Uri?) {
+                  val loader = ImageLoader(context)
+                  CoroutineScope(Dispatchers.Main).launch {
+                      front?.let {
+                          val bmp = loader.execute(ImageRequest.Builder(context).data(it).build()).drawable?.toBitmap()
+                          frontBitmap = bmp; resetMatrix(frontMatrix, bmp, 0f)
+                      }
+                      back?.let {
+                          val bmp = loader.execute(ImageRequest.Builder(context).data(it).build()).drawable?.toBitmap()
+                          backBitmap = bmp; resetMatrix(backMatrix, bmp, height / 2f)
+                      }
+                      invalidate()
+                  }
+              }
+
+              private fun resetMatrix(matrix: Matrix, bmp: Bitmap?, yOffset: Float) {
+                  bmp ?: return; matrix.reset()
+                  val scale = (width * 0.45f) / max(bmp.width, bmp.height)
+                  matrix.postScale(scale, scale)
+                  matrix.postTranslate(width * 0.25f, yOffset + 50f)
+              }
+
+              fun setBrightness(v: Int) { brightness = v; invalidate() }
+              fun setContrast(v: Int) { contrast = v; invalidate() }
+              fun setSharpness(v: Int) { sharpness = v; invalidate() }
+              fun startCrop(rect: RectF) { cropRect = rect; isCropping = true; invalidate() }
+
+              fun exportBitmap(): Bitmap? {
+                  val w = width; val h = height
+                  if (w == 0 || h == 0) return null
+                  val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                  drawOnCanvas(Canvas(out), forExport = true)
+                  return out
+              }
+
+              override fun onDraw(canvas: Canvas) {
+                  super.onDraw(canvas); drawOnCanvas(canvas, forExport = false)
+              }
+
+              private fun drawOnCanvas(canvas: Canvas, forExport: Boolean) {
+                  canvas.drawColor(Color.WHITE)
+                  if (!forExport) drawRuler(canvas)
+                  val cf = ColorMatrixColorFilter(floatArrayOf(
+                      contrast / 100f, 0f, 0f, 0f, brightness.toFloat(),
+                      0f, contrast / 100f, 0f, 0f, brightness.toFloat(),
+                      0f, 0f, contrast / 100f, 0f, brightness.toFloat(),
+                      0f, 0f, 0f, 1f, 0f
+                  ))
+                  paint.colorFilter = cf
+                  frontBitmap?.let { canvas.drawBitmap(it, frontMatrix, paint) }
+                  backBitmap?.let { canvas.drawBitmap(it, backMatrix, paint) }
+                  if (!forExport && isCropping) {
+                      cropRect?.let {
+                          val cp = Paint().apply {
+                              color = Color.GREEN; strokeWidth = 3f; style = Paint.Style.STROKE
+                          }
+                          canvas.drawRect(it, cp)
+                      }
+                  }
+              }
+
+              private fun drawRuler(canvas: Canvas) {
+                  val stepPx = pxPerMm * 10
+                  var x = 0f
+                  while (x < width) {
+                      canvas.drawLine(x, 0f, x, 20f, rulerPaint)
+                      canvas.drawText("${(x / pxPerMm).toInt()}mm", x, 45f, rulerPaint)
+                      x += stepPx
+                  }
+                  var y = 0f
+                  while (y < height) {
+                      canvas.drawLine(0f, y, 20f, y, rulerPaint)
+                      y += stepPx
+                  }
+                  val rw = refWidthMm * pxPerMm
+                  val rh = refHeightMm * pxPerMm
+                  val rp = Paint().apply {
+                      color = Color.BLUE; strokeWidth = 2f; style = Paint.Style.STROKE
+                      pathEffect = DashPathEffect(floatArrayOf(10f, 5f), 0f)
+                  }
+                  canvas.drawRect(50f, 50f, 50f + rw, 50f + rh, rp)
+                  canvas.drawText("85.6×54.0 mm", 50f + rw / 2, 45f, rulerPaint)
+              }
+
+              override fun onTouchEvent(event: MotionEvent): Boolean {
+                  when (event.action) {
+                      MotionEvent.ACTION_DOWN -> {
+                          lastX = event.x; lastY = event.y
+                          activeMatrix = if (event.y < height / 2f) frontMatrix else backMatrix
+                      }
+                      MotionEvent.ACTION_MOVE -> {
+                          activeMatrix?.postTranslate(event.x - lastX, event.y - lastY)
+                          lastX = event.x; lastY = event.y; invalidate()
+                      }
+                  }
+                  return true
+              }
+          }
+          VIEWEOF
+
+          # ========== 7. PdfExporter.kt ==========
+          cat > app/src/main/java/com/example/idcardmerger/PdfExporter.kt << 'PDFEOF'
+          package com.example.idcardmerger
+
+          import android.content.ContentValues
+          import android.content.Context
+          import android.graphics.Bitmap
+          import android.graphics.pdf.PdfDocument
+          import android.os.Build
+          import android.provider.MediaStore
+          import android.widget.Toast
+          import java.io.File
+          import java.io.FileOutputStream
+          import kotlin.math.min
+
+          object PdfExporter {
+              fun export(context: Context, bitmap: Bitmap, fileName: String) {
+                  val pdf = PdfDocument()
+                  val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create()
+                  val page = pdf.startPage(pageInfo)
+                  val canvas = page.canvas
+                  val scaleX = 595f / bitmap.width
+                  val scaleY = 842f / bitmap.height
+                  val scale = min(scaleX, scaleY) * 0.9f
+                  val dx = (595f - bitmap.width * scale) / 2f
+                  val dy = (842f - bitmap.height * scale) / 2f
+                  canvas.save()
+                  canvas.translate(dx, dy)
+                  canvas.scale(scale, scale)
+                  canvas.drawBitmap(bitmap, 0f, 0f, null)
+                  canvas.restore()
+                  pdf.finishPage(page)
+                  try {
+                      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                          val values = ContentValues().apply {
+                              put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+                              put(MediaStore.Downloads.MIME_TYPE, "application/pdf")
+                              put(MediaStore.Downloads.RELATIVE_PATH, "Documents/")
+                          }
+                          val uri = context.contentResolver.insert(
+                              MediaStore.Downloads.EXTERNAL_CONTENT_URI, values
+                          )
+                          uri?.let {
+                              context.contentResolver.openOutputStream(it)?.use { os -> pdf.writeTo(os) }
+                          }
+                      } else {
+                          @Suppress("DEPRECATION")
+                          val file = File(context.getExternalFilesDir(null), fileName)
+                          FileOutputStream(file).use { pdf.writeTo(it) }
+                      }
+                      Toast.makeText(context, "PDF已保存至Documents", Toast.LENGTH_SHORT).show()
+                  } catch (e: Exception) {
+                      Toast.makeText(context, "保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                  } finally { pdf.close() }
+              }
+          }
+          PDFEOF
+
+          # ========== 8. activity_main.xml ==========
+          cat > app/src/main/res/layout/activity_main.xml << 'XMLEOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:orientation="vertical">
+              <com.example.idcardmerger.ImageEditorView
+                  android:id="@+id/canvasView"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1" />
+              <LinearLayout
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:orientation="horizontal"
+                  android:padding="8dp">
+                  <Button android:id="@+id/btnPickFront" android:text="选正面"
+                      android:layout_weight="1" android:layout_width="0dp" android:layout_height="wrap_content"/>
+                  <Button android:id="@+id/btnPickBack" android:text="选反面"
+                      android:layout_weight="1" android:layout_width="0dp" android:layout_height="wrap_content"/>
+                  <Button android:id="@+id/btnExportPdf" android:text="导出PDF"
+                      android:layout_weight="1" android:layout_width="0dp" android:layout_height="wrap_content"/>
+              </LinearLayout>
+              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                  android:orientation="vertical" android:padding="8dp">
+                  <TextView android:text="亮度" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                  <SeekBar android:id="@+id/seekBrightness" android:max="200" android:progress="100"
+                      android:layout_width="match_parent" android:layout_height="wrap_content"/>
+                  <TextView android:text="对比度" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                  <SeekBar android:id="@+id/seekContrast" android:max="200" android:progress="100"
+                      android:layout_width="match_parent" android:layout_height="wrap_content"/>
+                  <TextView android:text="锐化" android:layout_width="wrap_content" android:layout_height="wrap_content"/>
+                  <SeekBar android:id="@+id/seekSharpness" android:max="100" android:progress="0"
+                      android:layout_width="match_parent" android:layout_height="wrap_content"/>
+              </LinearLayout>
+          </LinearLayout>
+          XMLEOF
+
+          # ========== 9. Gradle Wrapper Properties ==========
+          mkdir -p gradle/wrapper
+          cat > gradle/wrapper/gradle-wrapper.properties << 'WRAPPEREOF'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.5-bin.zip
+          networkTimeout=10000
+          validateDistributionUrl=true
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          WRAPPEREOF
+
+          echo "✅ All project files created successfully!"
+
+      - name: Commit all generated files
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "🤖 Auto-init: Create IdCardMerger project structure"
+          branch: main
